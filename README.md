@@ -1,8 +1,8 @@
 # MineOS 11 для OpenComputers
 
-Оболочка рабочего стола в стиле Windows 11 для OpenComputers/OpenOS с текстовым HTTP(S)-браузером. Установщик запускается прямо из OpenOS.
+Оболочка рабочего стола в стиле Windows 11 для OpenComputers/OpenOS с текстовым HTTP(S)-браузером. В репозитории также есть **MineBIOS 11** — отдельная предзагрузочная прошивка с меню выбора диска, списком оборудования и сервисной консолью.
 
-## Возможности и ограничения
+## MineOS 11: возможности и ограничения
 
 - Рабочий стол, кликабельная панель задач и меню «Пуск».
 - Кнопка `[WWW]` на панели или значок рабочего стола открывают браузер.
@@ -12,22 +12,54 @@
 - Это **не полноценный современный браузер**: JavaScript не исполняется, CSS и изображения не отображаются. OpenComputers предоставляет HTTP API, а не движок Chrome/Firefox.
 - Для веб-доступа нужна Internet Card и разрешённые HTTP-запросы в конфигурации OpenComputers.
 
-## Установка с GitHub из OpenOS
+## MineBIOS 11: предзагрузочное меню
+
+MineBIOS — не окно внутри рабочего стола: это EEPROM-прошивка, которая запускается **до OpenOS**.
+
+- **MAIN**: показывает версию прошивки, архитектуру, память, время работы и текущий boot address.
+- **BOOT**: обнаруживает файловые системы, показывает `/init.lua`, позволяет выбрать устройство и запустить загрузчик ОС с него. Выбранный диск записывается как предпочтительный boot address.
+- **DEVICES**: показывает доступные компоненты OpenComputers и их адреса.
+- **CONSOLE**: отдельная консоль прошивки с ограниченными командами `help`, `devices`, `scan`, `info`, `boot N [/path]`, `clear`, `reboot`, `off`.
+- Управление: `↑/↓` — выбор диска, `Enter` — загрузить выбранный диск, `1`–`4` — вкладки, `R` — повторное сканирование, `Esc` — вернуться в Boot.
+- EEPROM хранит только маленький bootstrap (`bios/eeprom.lua`); интерфейс BIOS находится в `/minebios.lua` на доступной файловой системе, чтобы прошивка укладывалась в лимит EEPROM 4 KiB.
+- MineOS 11 остаётся приложением OpenOS, а не самостоятельной ОС/файлом `/init.lua`. Поэтому BIOS сначала загружает OpenOS с выбранного диска; из OpenOS MineOS запускается командой `lua /home/mineos.lua`.
+- Для меню нужен подключённый GPU и экран. Для каждой ОС нужен собственный рабочий `/init.lua` (или `/boot/init.lua`) на диске.
+
+### Установка MineBIOS в игре
+
+> Установка меняет EEPROM-код компьютера. Не запускайте её, если хотите оставить стандартный BIOS. Скрипт сохраняет прежний EEPROM-код в `/home` и **не программирует EEPROM**, пока вы не введёте точную фразу `INSTALL MINEBIOS`.
+
+В уже загруженной OpenOS-консоли выполните:
+
+```sh
+wget -f https://raw.githubusercontent.com/FoxFord1A/MineOS11-OpenComputers/main/bios/install.lua /home/minebios-install.lua
+lua /home/minebios-install.lua
+```
+
+После подтверждения перезагрузите компьютер. Источник BIOS хранится в `bios/minebios.lua`; EEPROM-загрузчик — `bios/eeprom.lua`.
+
+### Восстановление прежней EEPROM-прошивки
+
+Установщик сохраняет её в файл наподобие `/home/minebios-eeprom.bak.123456.lua`. Сначала найдите точное имя, напечатанное установщиком, затем передайте этот путь скрипту восстановления:
+
+```sh
+wget -f https://raw.githubusercontent.com/FoxFord1A/MineOS11-OpenComputers/main/bios/restore.lua /home/minebios-restore.lua
+lua /home/minebios-restore.lua /home/minebios-eeprom.bak.123456.lua
+```
+
+Введите `RESTORE EEPROM` для подтверждения. Путь к резервной копии проверьте по сообщению установщика.
+
+## Установка MineOS 11 из OpenOS
 
 Репозиторий: <https://github.com/FoxFord1A/MineOS11-OpenComputers>.
-
-В OpenOS выполните:
 
 ```sh
 wget -f https://raw.githubusercontent.com/FoxFord1A/MineOS11-OpenComputers/main/mineos-install.lua /home/mineos-install.lua
 lua /home/mineos-install.lua
-```
-
-Установщик загружает приложение в `/home/mineos.lua`; предыдущую версию сохраняет в резервный файл. Запустите оболочку:
-
-```sh
 lua /home/mineos.lua
 ```
+
+Установщик MineOS загружает приложение в `/home/mineos.lua`; предыдущую версию сохраняет в резервный файл.
 
 ## Управление браузером
 
