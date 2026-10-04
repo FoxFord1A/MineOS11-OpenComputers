@@ -17,15 +17,10 @@ local function download(url, path, minBytes)
   if not file then return false, "Cannot create " .. path .. ": " .. tostring(err) end
   local total = 0
   local ok, failure = pcall(function()
-    -- Match OpenOS wget's plain GET request; custom headers can fail on some OC versions.
+    -- Match OpenOS wget's plain GET request and iterate directly: some releases return a callable table.
     local requestOK, request, requestError = pcall(internet.request, url)
     if not requestOK then error("HTTP request failed: " .. tostring(request or "no error details")) end
-    local requestType = type(request)
-    local requestMeta = (requestType == "table" or requestType == "userdata") and getmetatable(request) or nil
-    local callable = requestType == "function" or (type(requestMeta) == "table" and type(requestMeta.__call) == "function")
-    if not callable then
-      error("HTTP request returned no callable response iterator (" .. requestType .. "): " .. tostring(requestError or "no error details"))
-    end
+    if not request then error("HTTP request returned no response stream: " .. tostring(requestError or "no error details")) end
     for chunk in request do
       if type(chunk) == "string" and #chunk > 0 then
         total = total + #chunk
