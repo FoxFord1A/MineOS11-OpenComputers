@@ -43,6 +43,7 @@ local state = {
   app = "desktop",
   startOpen = false,
   powerOpen = false,
+  urlFocused = false,
   url = "https://example.com",
   pageTitle = "Добро пожаловать",
   pageLines = {
@@ -60,6 +61,7 @@ local state = {
   maxBody = 131072,
   history = {},
   historyIndex = 0,
+  links = {},
   browserHit = {},
 }
 
@@ -250,6 +252,47 @@ local function normalizeURL(url)
   return url
 end
 
+local function resolveHref(base, href)
+  href = (href or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if href == "" or href:match("^#") or href:match("^[%a]+:") then return nil end
+  local protocol = base:match("^(https?):")
+  local host, path = base:match("^https?://([^/]+)(/.*)$")
+  if not host then host = base:match("^https?://([^/]+)"); path = "/" end
+  if not protocol or not host then return nil end
+  if href:match("^//") then return protocol .. ":" .. href end
+  if href:sub(1, 1) == "/" then return protocol .. "://" .. host .. href end
+  local basePath = (path or "/"):gsub("[?#].*$", "")
+  if href:sub(1, 1) == "?" then return protocol .. "://" .. host .. basePath .. href end
+  local suffix = href:match("([?#].*)$") or ""
+  local hrefPath = href:gsub("[?#].*$", "")
+  local directory = basePath:match("^(.*[/])") or "/"
+  local parts = {}
+  for part in (directory .. hrefPath):gmatch("[^/]+") do
+    if part == ".." then
+      if #parts > 0 then parts[#parts] = nil end
+    elseif part ~= "." then
+      parts[#parts + 1] = part
+    end
+  end
+  return protocol .. "://" .. host .. "/" .. table.concat(parts, "/") .. suffix
+end
+
+local function extractLinks(html, base)
+  local links = {}
+  local linkedHTML = html:gsub("<[aA]%s*([^>]*)>(.-)</[aA]%s*>", function(attrs, label)
+    local href = attrs:match("[hH][rR][eE][fF]%s*=%s*\"([^\"]+)\"")
+      or attrs:match("[hH][rR][eE][fF]%s*=%s*'([^']+)'")
+      or attrs:match("[hH][rR][eE][fF]%s*=%s*([^%s>]+)")
+    local target = resolveHref(base, href)
+    if not target or #links >= 9 then return label end
+    local cleanLabel = htmlToText(label):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if cleanLabel == "" then cleanLabel = target end
+    links[#links + 1] = target
+    return " [" .. tostring(#links) .. "] " .. cleanLabel .. " "
+  end)
+  return linkedHTML, links
+end
+
 local drawBrowser
 
 local function loadPage(addToHistory)
@@ -260,6 +303,8 @@ local function loadPage(addToHistory)
     return
   end
   state.url = url
+  state.urlFocused = false
+  state.links = {}
   if addToHistory ~= false then
     for i = #state.history, state.historyIndex + 1, -1 do state.history[i] = nil end
     state.history[#state.history + 1] = url
@@ -274,14 +319,15 @@ local function loadPage(addToHistory)
   if not internet then
     state.status = "Internet Card / библиотека internet не найдена"
     state.pageLines = {
-      "OpenOS не обнаружил библиотеку internet.",
-      "Подключите Internet Card и проверьте конфигурацию мода.",
+      "Не удалось найти библиотеку OpenOS internet.",
+      "Проверьте: в компьютере установлена Internet Card.",
+      "Проверьте: интернет и HTTP разрешены в конфигурации OpenComputers.",
     }
     if drawBrowser then drawBrowser() end
     return
   end
 
-  local ok, body, truncated = pcall(function()
+  local ok, body, truncated, httpCode, httpMessage = pcall(function()
     local chunks, total = {}, 0
     local request = internet.request(url, nil, { ["User-Agent"] = "MineOS11-TextBrowser/1.1" })
     for chunk in request do
@@ -294,7 +340,13 @@ local function loadPage(addToHistory)
       end
       if total >= state.maxBody then break end
     end
-    return table.concat(chunks), total >= state.maxBody
+    local code, message
+    local mt = getmetatable(request)
+    if mt and mt.__index and type(mt.__index.response) == "function" then
+      local responseOK, responseCode, responseMessage = pcall(mt.__index.response)
+      if responseOK then code, message = responseCode, responseMessage end
+    end
+    return table.concat(chunks), total >= state.maxBody, code, message
   end)
 
   if not ok then
@@ -302,14 +354,27 @@ local function loadPage(addToHistory)
     state.pageLines = {
       tostring(body),
       "",
-      "Проверьте Internet Card, настройку HTTP и адрес сайта.",
+      "Адрес: " .. url,
+      "Проверьте Internet Card и настройку HTTP в OpenComputers.",
     }
   else
-    local plain = htmlToText(body or "")
+    body = body or ""
+    local rawTitle = body:match("<[tT][iI][tT][lL][eE][^>]*>(.-)</[tT][iI][tT][lL][eE]%s*>")
+    if rawTitle then
+      local cleanedTitle = htmlToText(rawTitle):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+      if cleanedTitle ~= "" then state.pageTitle = cleanedTitle end
+    end
+    local linkedBody
+    linkedBody, state.links = extractLinks(body, url)
+    local plain = htmlToText(linkedBody)
     state.pageLines = wrapText(plain, math.max(15, sw - 8))
     if #state.pageLines == 0 then state.pageLines = { "На странице не найден отображаемый текст." } end
     if truncated then state.pageLines[#state.pageLines + 1] = "[Ответ обрезан по лимиту 128 KiB.]" end
-    state.status = "Загружено " .. tostring(#(body or "")) .. " байт"
+    if httpCode then
+      state.status = "HTTP " .. tostring(httpCode) .. " " .. tostring(httpMessage or "") .. " | " .. tostring(#body) .. " байт"
+    else
+      state.status = "Получено " .. tostring(#body) .. " байт"
+    end
   end
   if drawBrowser then drawBrowser() end
 end
@@ -359,11 +424,13 @@ drawBrowser = function()
   local goX = x + w - 11
   local fieldX = x + 17
   local fieldW = math.max(1, goX - fieldX - 1)
-  fill(fieldX, toolbarY, fieldW, 1, " ", C.ink, C.white)
+  local fieldBG = state.urlFocused and C.pale or C.white
+  fill(fieldX, toolbarY, fieldW, 1, " ", C.ink, fieldBG)
   local shownURL = state.url
+  if shownURL == "" then shownURL = "нажмите и введите адрес" end
   local urlLen = unicode.len(shownURL)
   if urlLen > fieldW - 2 then shownURL = unicode.sub(shownURL, urlLen - fieldW + 3) end
-  text(fieldX + 1, toolbarY, shownURL, fieldW - 2, C.ink, C.white)
+  text(fieldX + 1, toolbarY, shownURL, fieldW - 2, state.url == "" and C.muted or C.ink, fieldBG)
   fill(goX, toolbarY, 9, 1, " ", C.white, C.accent)
   text(goX, toolbarY, "[GO]", 9, C.white, C.accent)
 
@@ -388,7 +455,7 @@ drawBrowser = function()
   end
   fill(x + 1, y + h - 2, w - 2, 1, " ", C.ink, C.pale)
   text(x + 2, y + h - 2, state.status, w - 4, C.muted, C.pale)
-  text(2, sh, "Esc: рабочий стол | Enter: перейти | ↑/↓: прокрутка", sw - 3, C.white, C.blue)
+  text(2, sh, "Клик по адресу: ввод | Enter/GO: открыть | цифра 1-9: ссылка | Esc: выход", sw - 3, C.white, C.blue)
 end
 
 local function openBrowser()
@@ -447,6 +514,7 @@ local function handleBrowserClick(x, y)
     if x >= hit.goX and x <= hit.goX + 8 then loadPage(true); return end
     if x >= hit.fieldX and x <= hit.fieldEnd then
       state.url = ""
+      state.urlFocused = true
       state.status = "Введите адрес и нажмите Enter"
       drawBrowser()
       return
@@ -511,17 +579,28 @@ local function handleKey(char, code)
     return
   end
   if state.app == "browser" then
-    if code == 28 then loadPage(true); return end
+    if code == 28 then
+      if state.urlFocused then loadPage(true)
+      else state.status = "Чтобы ввести адрес, нажмите на адресную строку"; drawBrowser() end
+      return
+    end
     if code == 14 then
-      state.url = unicode.sub(state.url, 1, math.max(0, unicode.len(state.url) - 1))
-      drawBrowser()
+      if state.urlFocused then
+        state.url = unicode.sub(state.url, 1, math.max(0, unicode.len(state.url) - 1))
+        drawBrowser()
+      else
+        historyBack()
+      end
       return
     end
     if code == 200 then state.scroll = math.max(0, state.scroll - 1); drawBrowser(); return end
     if code == 208 then state.scroll = math.min(math.max(0, #state.pageLines - 1), state.scroll + 1); drawBrowser(); return end
     if char and char > 0 then
       local ok, ch = pcall(unicode.char, char)
-      if ok and ch and ch ~= "\n" and ch ~= "\r" then
+      if ok and ch and not state.urlFocused and ch:match("^[1-9]$") then
+        local target = state.links[tonumber(ch)]
+        if target then state.url = target; loadPage(true) end
+      elseif ok and ch and state.urlFocused and ch ~= "\n" and ch ~= "\r" then
         state.url = state.url .. ch
         drawBrowser()
       end
