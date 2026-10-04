@@ -20,8 +20,11 @@ local function download(url, path, minBytes)
     -- Match OpenOS wget's plain GET request; custom headers can fail on some OC versions.
     local requestOK, request, requestError = pcall(internet.request, url)
     if not requestOK then error("HTTP request failed: " .. tostring(request or "no error details")) end
-    if type(request) ~= "function" then
-      error("HTTP request returned no response iterator (" .. type(request) .. "): " .. tostring(requestError or "no error details"))
+    local requestType = type(request)
+    local requestMeta = (requestType == "table" or requestType == "userdata") and getmetatable(request) or nil
+    local callable = requestType == "function" or (type(requestMeta) == "table" and type(requestMeta.__call) == "function")
+    if not callable then
+      error("HTTP request returned no callable response iterator (" .. requestType .. "): " .. tostring(requestError or "no error details"))
     end
     for chunk in request do
       if type(chunk) == "string" and #chunk > 0 then
