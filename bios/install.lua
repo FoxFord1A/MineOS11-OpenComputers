@@ -17,7 +17,12 @@ local function download(url, path, minBytes)
   if not file then return false, "Cannot create " .. path .. ": " .. tostring(err) end
   local total = 0
   local ok, failure = pcall(function()
-    local request = internet.request(url, nil, { ["User-Agent"] = "MineBIOS11-Installer/1.0" })
+    -- Match OpenOS wget's plain GET request; custom headers can fail on some OC versions.
+    local requestOK, request, requestError = pcall(internet.request, url)
+    if not requestOK then error("HTTP request failed: " .. tostring(request or "no error details")) end
+    if type(request) ~= "function" then
+      error("HTTP request returned no response iterator (" .. type(request) .. "): " .. tostring(requestError or "no error details"))
+    end
     for chunk in request do
       if type(chunk) == "string" and #chunk > 0 then
         total = total + #chunk
@@ -28,7 +33,7 @@ local function download(url, path, minBytes)
     end
   end)
   local closeOK, closeError = file:close()
-  if not ok then pcall(filesystem.remove, path); return false, tostring(failure) end
+  if not ok then pcall(filesystem.remove, path); return false, tostring(failure or "HTTP response failed without an error message") end
   if closeOK == nil then pcall(filesystem.remove, path); return false, tostring(closeError) end
   if total < (minBytes or 1) then pcall(filesystem.remove, path); return false, "Downloaded file is empty or incomplete" end
   return true, total
